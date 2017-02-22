@@ -1,0 +1,869 @@
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+    1    1                      ;****************************************************************
+    2    2                      ;* This is a simple absolute assembly project                    *
+    3    3                      ;* Portions Copyright © 2008 W. Craig Scratchley
+    4    4                      ;* School of Engineering Science, SFU, BC, Canada  V5A 1S6
+    5    5                      ;* ENSC 215, May 2008
+    6    6                      ;* Copying and distribution of this file, with or without modification,
+    7    7                      ;*     are permitted in any medium without royalty provided the copyright
+    8    8                      ;*     notice and this notice are preserved.
+    9    9                      ;*****************************************************************
+ 1539   31                      		
+ 1540   32                      ; port-var.inc can be included to get ports to the debugger's data window, etc.
+ 1541   33                      ;		INCLUDE "portVar.inc"
+ 1542   34                      
+ 1543   35                      		ORG 	RAMBase
+ 1544   36                      		
+ 1545   37          0000 0028   StackRes	EQU	40	; amount of stack space to reserve
+ 1546   38                      
+ 1547   39                      
+ 1548   40                      ; variable definitions for unit tests can be conditionally included here
+ 1549   41                      
+ 1550   42                      
+ 1551   43                      
+ 1552   44                      
+ 1553   45                      ; code space
+ 1554   46                      ; For this project, the label ENTRY must be used for the beginning of
+ 1555   47                      ;	the program.
+ 1556   48                      		INCLUDE "FpgaBrdVar.inc"
+ 1557    1i a000800             swIntCnt:	ds.b 1	;Switch interrupt counter.
+ 1558    2i a000801             swStat_old:	ds.b 1	;old switch status
+ 1559    3i a000802             swStat_new:	ds.b 1
+ 1560   49                      		INCLUDE "remainderVar.inc"
+ 1561    1i                     ***************************************************
+ 1562    2i                     ; GLOBAL VARIABLES FOR Remainder LIBRARY
+ 1563    3i                     ***************************************************
+ 1564    4i                     
+ 1565    5i a000803             Scratch		ds.b	5
+ 1566    6i a000808             QuotientLSB	ds.b	1
+ 1567    7i a000809             QuotientIsBig	ds.b	1
+ 1568    8i                     
+ 1569    9i                     ***************************************************
+ 1570   10i                     ; Calculate the size of the Remainder subroutine.
+ 1571   11i                     ;SrSize:		dc.w	EndRemainder - Remainder
+ 1572   12i                     
+ 1574   50                      
+ 1575   51                      ENTRY:
+ 1576   52                      ; stack grows down, so location #Dbg12Ram will not be modified.
+ 1577   53  a00080A CF0A 00     		lds	#Dbg12Ram	;set up stack pointer
+ 1578   54                      		INCLUDE "FpgaBrdInit.inc"
+ 1579    1i                     
+ 1580    2i                     
+ 1581    3i a00080D 4C03 80     	bset  DDRB, #LED1
+ 1582    4i                     ;LCD Initialization
+ 1583    5i a000810 4C09 04     		bset DDRE, CheckLcdBusy
+ 1584    6i a000813 4D08 04     		bclr PORTE, CheckLcdBusy
+ 1585    7i                     		
+ 1586    8i a000816 7900 01     		clr PORTB
+ 1587    9i                     		
+ 1588   10i a000819 4C03 70     		bset DDRB, EClk | Rw | RS
+ 1589   11i                     ;-----------------------------------------------		
+ 1590   12i                     
+ 1591   13i a00081C 86FF        		ldaa #$ff
+ 1592   14i a00081E 5A02        		staa DDRA
+ 1593   15i a000820 8608        		ldaa #8
+ 1594   16i                     
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1595   17i a000822 36          		psha
+ 1596   18i a000823 CD0D 00     		ldy #InitCmdTbl
+ 1597   19i                     		
+ 1598   20i                     
+ 1599   21i a000826 A670        NextCmd:	ldaa 1,y+
+ 1600   22i a000828 5A00        		staa PORTA
+ 1601   23i                     
+ 1602   24i a00082A 4C01 10     		bset PORTB,#EClk		
+ 1603   25i                     
+ 1604   26i a00082D 4D01 10     		bclr PORTB,#EClk
+ 1605   27i a000830 E670        		ldab 1,y+
+ 1606   28i                     
+ 1607   29i a000832 160D 10     		jsr uS100Delay
+ 1608   30i                     		
+ 1609   31i                     		
+ 1610   32i                     
+ 1611   33i a000835 6380        		dec 0,sp
+ 1612   34i a000837 26ED        		bne NextCmd
+ 1613   35i a000839 32          		pula
+ 1614   36i                     ;--------------------------------------------------	
+ 1615   37i                     ; interrupt initialization	
+ 1616   38i a00083A 4C09 C0     	bset DDRE, nRST1 | nRST2
+ 1617   39i                     	;;; bclr DDRE, Status2 ; default setting
+ 1618   40i a00083D 180B 0008   	movb #0, swIntCnt ; initialize the interrupt counter
+             000841 00         
+ 1619   41i                     	; initialize switch status variable (swStat_old)
+ 1620   42i a000842 9601        	ldaa PORTB
+ 1621   43i                     	; only the four button bits are important
+ 1622   44i a000844 840F        	anda #(nSw4B | nSw3WG | nSw2RO | nSw1Y)
+ 1623   45i a000846 7A08 01     	staa swStat_old
+ 1624   46i                     	;Initialize the external interrupt
+ 1625   47i a000849 1803 0D1A   	movw #ExtIsr, IRQIsrP
+             00084D 0B32       
+ 1626   48i a00084F 4D08 C0     	bclr PORTE, nRST1 | nRST2 ; reset flipflops
+ 1627   49i                     	;enable external interrupts in default level-sensitive mode
+ 1628   50i                     	; (not edge sentitive)
+ 1629   51i a000852 4C1E 40     	bset INTCR, IRQEN |!IRQE
+ 1630   52i                     	;enable push button interrupt but not daughter brd interrupt
+ 1631   53i a000855 4C08 40     	bset PORTE, nRST1 |!nRST2	
+ 1632   55                      		INCLUDE "DaughterBrdInit.inc"
+ 1633    1i                     ; Initialize 7-segment displays
+ 1634    2i                     
+ 1635    3i a000858 4CD7 9C     	bset	DDRS, DISPA0 | DISPA1 | nDISPEN | DDP
+ 1636    4i a00085B 4CFF 7F     	bset	DDRDLC, #$7f			;DA-DG as output
+ 1637    5i                     	
+ 1638    6i a00085E 4DD6 90     	bclr	PORTS, DDP | nDISPEN		;decimal point off
+ 1639    7i                     
+ 1640    8i                     	
+ 1641   56                      		INCLUDE "CommonInit.inc"
+ 1642    1i                     ;	movw	#TimerCh2,TimerCh2IsrP	;Int vector Init
+ 1643    2i                     
+ 1644    3i                     ;Timer-related initialization
+ 1645    4i                     
+ 1646    5i                     ;	bset	TIOS,IOS2		;CH2 ouptput compare
+ 1647    6i                     ;	bset	TMSK2,PR0 | PR2		;Prescaler = 32
+ 1648    7i                     ;	bset	TSCR,TEN | TFFCA	;timer enable & Fast Flag clear
+ 1649   57                      		;INCLUDE "DaughterBrdTest.inc"
+ 1650   58                      		INCLUDE "TimerInit.inc"
+ 1651    1i                     ;initializing the timer	
+ 1652    2i                     
+ 1653    3i                     ;Timer 3 (Finding period1 and period2
+ 1654    4i                     
+ 1655    5i a000861 1803 08E9   	movw	#TimerCh3, TimerCh3IsrP
+             000865 0B28       
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1656    6i                     ;	movw	#TimerCh2, TimerCh2IsrP
+ 1657    7i                     	
+ 1658    8i                     	;bset TIOS,IOS0|IOS1
+ 1659    9i a000867 4C8C 08     	bset TMSK1,C3I	
+ 1660   10i a00086A 4C8D 05     	bset TMSK2, PR0 | PR2
+ 1661   11i a00086D 4C8B C0     	bset TCTL4, %11000000	
+ 1662   12i                     	;set Timer control register to capture rising or falling edge
+ 1663   13i                     	
+ 1664   14i a000870 4C86 90     	bset TSCR,TEN|TFFCA
+ 1665   15i                     
+ 1666   16i                     
+ 1667   17i                     ;Timer 1 (For 3Hz interrupt)
+ 1668   18i                     
+ 1669   19i                     ;	movw	#TimerCh1, TimerCh1IsrP
+ 1670   20i                     ;	bset	TIOS,IOS1
+ 1671   21i                     ;	bset	TMSK1,C1I
+ 1672   22i                     ;	bset	TMSK2,PR0 | PR2
+ 1673   23i                     ;	bset	TSCR,TEN|TFFCA
+ 1674   24i                     	
+ 1675   25i                     	
+ 1676   26i                     ;Timer 2 (de-bouncing )
+ 1677   27i                     	
+ 1678   28i                     ;End of Timer init
+ 1679   29i                     	
+ 1680   59                      	;	INCLUDE "Timer.inc"
+ 1681   60                      		
+ 1682   61                      ;Final Project
+ 1683   62                      
+ 1684   63                      
+ 1685   64                      ;	bset PORTS,DTS	;turn on the temperature sensor
+ 1686   65                      ; 	bclr TIOS,IOS3	;set timer to input capture, using channel 3	
+ 1687   66                      	
+ 1688   67                      ;-------------------------------------------------------------
+ 1689   68                      
+ 1690   69                      ;Finding temperature
+ 1691   70          0000 1C20   F	EQU 	7200
+ 1692   71          0000 11C6   G	EQU	4550
+ 1693   72          0000 0FA0   P	EQU	4000
+ 1694   73          0000 092E   Q	EQU	2350
+ 1695   74                      
+ 1696   75          0000 0064   R	EQU	100
+ 1697   76          0000 000A   S	EQU	10
+ 1698   77                      
+ 1699   78                      ;	MOVw	#5, T1
+ 1700   79                      ;	MOVw	#10, T2
+ 1701   80  a000873 1820 008F   	lbra celsius
+ 1702   81                      
+ 1703   82                      ;RunLoop:
+ 1704   83                      
+ 1705   84                      
+ 1706   85                      ;	ldd count
+ 1707   86                      ;	ldx #2
+ 1708   87                      ;	idiv
+ 1709   88                      ;	std tmp
+ 1710   89                      ;	ldaa tmp
+ 1711   90                      ;	cmpa #1
+ 1712   91                      ;	lbeq fahreinheit		
+ 1713   92                      ;Joanne's Loop
+ 1714   93                      
+ 1715   94                      LED:	
+ 1716   95  a000877 4DD6 0C     	bclr PORTS, DISPA0|DISPA1
+ 1717   96                      
+ 1718   97  a00087A F608 D4     	ldab digit1
+ 1719   98  a00087D 160D E3     	jsr DispDigit
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1720   99  a000880 1608 C3     	jsr NoGhost
+ 1721  100                      	
+ 1722  101  a000883 4CD6 04     	bset PORTS, DISPA0
+ 1723  102  a000886 4DD6 08     	bclr PORTS, DISPA1
+ 1724  103  a000889 4CD6 80     	bset PORTS,DDP
+ 1725  104  a00088C F608 D5     	ldab digit2
+ 1726  105  a00088F 160D E3     	jsr DispDigit
+ 1727  106  a000892 1608 C3     	jsr NoGhost
+ 1728  107  a000895 4DD6 80     	bclr PORTS,DDP
+ 1729  108                      	
+ 1730  109  a000898 4DD6 04     	bclr PORTS, DISPA0
+ 1731  110  a00089B 4CD6 08     	bset PORTS, DISPA1
+ 1732  111  a00089E F608 D6     	ldab digit3
+ 1733  112  a0008A1 160D E3     	jsr DispDigit
+ 1734  113  a0008A4 1608 C3     	jsr NoGhost
+ 1735  114                      	
+ 1736  115  a0008A7 4CD6 04     	bset PORTS,DISPA0
+ 1737  116  a0008AA 4CD6 08     	bset PORTS,DISPA1
+ 1738  117  a0008AD F608 D7     	ldab digit4
+ 1739  118  a0008B0 160D E3     	jsr DispDigit
+ 1740  119  a0008B3 1608 C3     	jsr NoGhost
+ 1741  120                      	
+ 1742  121  a0008B6 B608 D7     	ldaa digit4
+ 1743  122  a0008B9 810C        	cmpa #$0c
+ 1744  123  a0008BB 1827 0047   	lbeq celsius
+ 1745  124  a0008BF 1820 0091   	lbra fahreinheit
+ 1746  125                      
+ 1747  126                      
+ 1748  127                      NoGhost:
+ 1749  128  a0008C3 C605        	ldab #5
+ 1750  129  a0008C5 160D 10     	jsr uS100Delay
+ 1751  130  a0008C8 C6FF        	ldab #$ff
+ 1752  131  a0008CA 160D E3     	jsr DispDigit
+ 1753  132  a0008CD 3D          	rts			
+ 1754  133  a0008CE             i	ds.b	1
+ 1755  134                      ;num	dc.b	2,$0f,3,$0f
+ 1756  135                      ;num1	ds.w	1	
+ 1757  136                      ;-----------------------------------------------------	
+ 1758  137                      
+ 1759  138  a0008CF             value1	ds.w	1
+ 1760  139                      
+ 1761  140  a0008D1             dig1	ds.b	1
+ 1762  141  a0008D2             dig2	DS.B	1	
+ 1763  142  a0008D3             dig3	ds.b	1
+ 1764  143  a0008D4             digit1	ds.b	1
+ 1765  144  a0008D5             digit2	ds.b	1
+ 1766  145  a0008D6             digit3	ds.b	1
+ 1767  146  a0008D7             digit4	ds.b	1
+ 1768  147                      	
+ 1769  148  a0008D8             count		ds.b	1	
+ 1770  149  a0008D9             oldvalue	ds.b	1
+ 1771  150  a0008DA             segAdd		ds.b	1
+ 1772  151  a0008DB             segVar0		ds.b	1
+ 1773  152  a0008DC             last		ds.w	1
+ 1774  153  a0008DE             periodT1	ds.w	1
+ 1775  154  a0008E0             periodT2	ds.w	1
+ 1776  155  a0008E2             T1		ds.w	1
+ 1777  156  a0008E4             T2		ds.w	1	
+ 1778  157                      	
+ 1779  158  a0008E6 0608 0A     		jmp	ENTRY	
+ 1780  159                      	
+ 1781  160                      
+ 1782  161                      ;subroutine libraries and constants
+ 1783  162                      ;subroutine libraries and constants in RAM
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1784  163                      ;try to put subroutine libraries in active development here
+ 1785  164                      	;	INCLUDE "FpgaBrdLib.inc"
+ 1786  165                      	;	INCLUDE "DaughterBrdLib.inc"
+ 1787  166                      		INCLUDE "Timer.inc"
+ 1788    1i                     
+ 1789    2i                     TimerCh3:
+ 1790    3i a0008E9 DC96        	ldd TC3
+ 1791    4i a0008EB B746        	tfr d,y
+ 1792    5i                     	
+ 1793    6i a0008ED 4FAE 080B   	brclr PORTT, #%00001000, rising
+ 1794    7i a0008F1 B308 DC     	subd	last
+ 1795    8i a0008F4 7C08 E0     	std	periodT2
+ 1796    9i                     ;	movw	#5,periodT2
+ 1797   10i a0008F7 7D08 DC     	sty	last
+ 1798   11i a0008FA 2009        	bra	done
+ 1799   12i                     	
+ 1800   13i                     rising:
+ 1801   14i                     	;bset PORTT,#%00001000
+ 1802   15i a0008FC B308 DC     	subd 	last
+ 1803   16i a0008FF 7C08 DE     	std 	periodT1
+ 1804   17i                     ;	movw	#2,periodT1
+ 1805   18i a000902 7D08 DC     	sty 	last
+ 1806   19i                     	
+ 1807   20i                     
+ 1808   21i                     done:
+ 1809   22i                     	;movw	TC3,last
+ 1810   23i a000905 0B          	rti
+ 1811  167                      		INCLUDE "TimerTest.inc"
+ 1812    1i                     
+ 1813    2i                     	
+ 1814    3i                     
+ 1815    4i                     	
+ 1816  168                      		INCLUDE "tempCalc.inc"
+ 1817    1i                     celsius:
+ 1818    2i                     
+ 1819    3i                     
+ 1820    4i a000906 FE08 DE     	ldx periodT1
+ 1821    5i a000909 7E08 E2     	stx T1
+ 1822    6i                     
+ 1823    7i                     
+ 1824    8i a00090C FE08 E0     	ldx periodT2
+ 1825    9i a00090F 7E08 E4     	stx T2
+ 1826   10i                     		
+ 1827   11i a000912 CC0F A0     	ldd #P
+ 1828   12i a000915 FD08 E2     	ldy T1
+ 1829   13i                     	
+ 1830   14i a000918 13          	emul
+ 1831   15i                     
+ 1832   16i a000919 FE08 E4     	ldx T2
+ 1833   17i                     	
+ 1834   18i a00091C 11          	ediv
+ 1835   19i                     ;-------------------------	
+ 1836   20i a00091D 7D08 CF     	sty value1
+ 1837   21i                     
+ 1838   22i a000920 CC09 2E     	ldd #Q
+ 1839   23i a000923 B308 CF     	subd value1
+ 1840   24i a000926 CE00 64     	ldx #R
+ 1841   25i a000929 1810        	idiv
+ 1842   26i a00092B 7E08 D1     	stx dig1
+ 1843   27i a00092E 180C 08D2   	movb dig2,digit1
+             000932 08D4       
+ 1844   28i                     
+ 1845   29i a000934 CE00 0A     	ldx #S
+ 1846   30i a000937 1810        	idiv
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1847   31i a000939 7E08 D1     	stx dig1
+ 1848   32i a00093C 180C 08D2   	movb dig2,digit2
+             000940 08D5       
+ 1849   33i a000942 7C08 D1     	std dig1
+ 1850   34i a000945 180C 08D2   	movb dig2,digit3
+             000949 08D6       
+ 1851   35i                     	
+ 1852   36i a00094B 180B 0C08   	movb #$0c,digit4
+             00094F D7         
+ 1853   37i a000950 1820 FF23   	lbra LED
+ 1854   38i                     ;-----------------------
+ 1855   39i                     
+ 1856   40i                     
+ 1857   41i                     fahreinheit:
+ 1858   42i                     	
+ 1859   43i a000954 FE08 DE     	ldx periodT1
+ 1860   44i a000957 7E08 E2     	stx T1
+ 1861   45i                     
+ 1862   46i                     
+ 1863   47i a00095A FE08 E0     	ldx periodT2
+ 1864   48i a00095D 7E08 E4     	stx T2
+ 1865   49i                     		
+ 1866   50i a000960 CC1C 20     	ldd #F
+ 1867   51i a000963 FD08 E2     	ldy T1
+ 1868   52i                     	
+ 1869   53i a000966 13          	emul
+ 1870   54i                     
+ 1871   55i a000967 FE08 E4     	ldx T2
+ 1872   56i                     	
+ 1873   57i a00096A 11          	ediv
+ 1874   58i                     ;-------------------------	
+ 1875   59i a00096B 7D08 CF     	sty value1
+ 1876   60i                     
+ 1877   61i a00096E CC11 C6     	ldd #G
+ 1878   62i a000971 B308 CF     	subd value1
+ 1879   63i a000974 CE00 64     	ldx #R
+ 1880   64i a000977 1810        	idiv
+ 1881   65i a000979 7E08 D1     	stx dig1
+ 1882   66i a00097C 180C 08D2   	movb dig2,digit1
+             000980 08D4       
+ 1883   67i                     
+ 1884   68i a000982 CE00 0A     	ldx #S
+ 1885   69i a000985 1810        	idiv
+ 1886   70i a000987 7E08 D1     	stx dig1
+ 1887   71i a00098A 180C 08D2   	movb dig2,digit2
+             00098E 08D5       
+ 1888   72i a000990 7C08 D1     	std dig1
+ 1889   73i a000993 180C 08D2   	movb dig2,digit3
+             000997 08D6       
+ 1890   74i a000999 180B 0F08   	movb #$0f,digit4
+             00099D D7         
+ 1891   75i a00099E 1820 FED5   	lbra LED	
+ 1892   76i                     	
+ 1893  169                      		
+ 1894  170                      ;tidy up RAM and switch to EEPROM
+ 1895  171                      		INCLUDE "SwitchToEeprom.inc"
+ 1896    1i                     ;*****************************************************************
+ 1897    2i                     ;* Copyright © 2008-2009 W. Craig Scratchley
+ 1898    3i                     ;* School of Engineering Science, SFU, BC, Canada  V5A 1S6
+ 1899    4i                     ;* ENSC 215, June 2009
+ 1900    5i                     ;* Copying and distribution of this file, with or without modification,
+ 1901    6i                     ;*     are permitted in any medium without royalty provided the copyright
+ 1902    7i                     ;*     notice and this notice are preserved.
+ 1903    8i                     ;*****************************************************************
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1929  172                      		
+ 1930  173                      	
+ 1931  174                      ;subroutine libraries and constants in EEPROM
+ 1932  175                      ;use this space if RAM gets to full
+ 1933  176                      ;order so that more-stable libraries come before less-stable libraries
+ 1934  177                      ; ...
+ 1935  178                      		INCLUDE "FpgaBrdLib.inc"
+ 1936    1i                     ; ENSC 151 FPGA board library
+ 1937    2i                     
+ 1938    3i         0000 0038   FirstCmd:	equ	LcdFuncSet | LcdDL | LcdN	; | !LcdF	
+ 1939    4i                     		
+ 1940    5i                     ; Table of initialization commands (see Sharp LCD documentation)
+ 1941    6i                     ;
+ 1942    7i                     ;					100uS
+ 1943    8i                     ;			instruction	delay		
+ 1944    9i                     ;			byte		periods
+ 1945   10i a000D00 3829        InitCmdTbl:	dc.b	FirstCmd,	41	; get the modules attention.
+ 1946   11i a000D02 3801        		dc.b	FirstCmd,	1
+ 1947   12i a000D04 3801        		dc.b	FirstCmd,	1
+ 1948   13i a000D06 3801        		dc.b	FirstCmd,	1	; specify interface width, lines & font.
+ 1949   14i a000D08 08          		dc.b	LcdDispOnOff | !LcdD | !LcdC | !LcdB
+ 1950   15i a000D09 01          		dc.b			1	; turn display off.
+ 1951   16i a000D0A 0111        		dc.b	LcdDispClr,	17		
+ 1952   17i a000D0C 06          		dc.b	LcdEntMdSet | LcdInD | !LcdS
+ 1953   18i a000D0D 01          		dc.b			1	; increment cursor, no display scroll.
+ 1954   19i a000D0E 0F          		dc.b	LcdDispOnOff | LcdD | LcdC | LcdB
+ 1955   20i a000D0F 01          		dc.b			1	
+ 1956   21i                     
+ 1957   22i                     ; Subroutine to delay for multiples of 100uS.
+ 1958   23i                     ; Taken from "Programming the Motorola M68HC12 Family" by G. Doughman, 2000
+ 1959   24i                     ; The number of multiples should be placed in accumulator b.
+ 1960   25i                     ; Regs Mod:  CCR, X, B
+ 1961   26i                     
+ 1962   27i a000D10 CE00 C8     uS100Delay:	ldx	#200		; 100 uS delay constant @ 8MHz E-clock.
+ 1963   28i a000D13 09          Delay:		dex
+ 1964   29i a000D14 26FD        		bne	Delay
+ 1965   30i a000D16 0431 F7     		dbne	b,uS100Delay	; times the number in a	accumulator	        	
+ 1966   31i a000D19 3D          		rts
+ 1967   32i                     ;Inerrupt Service routine for the External IRQ
+ 1968   33i                     
+ 1969   34i                     ExtIsr:
+ 1970   35i                     	;send reset pusle to push button(/LCD) flip flop
+ 1971   36i a000D1A 4D08 40     	bclr PORTE, nRST1
+ 1972   37i a000D1D 4C08 40     	bset PORTE, nRST1
+ 1973   38i                     	
+ 1974   39i                     	
+ 1975   40i                     ;----------------------------------------------------------
+ 1976   41i                     	
+ 1977   42i                     ;	;Check if the interrupt is from the Push Buttons
+ 1978   43i                     ;	ldaa PORTB
+ 1979   44i                     ;	; only the four button bits are important
+ 1980   45i                     ;	anda #(nSw4B | nSw3WG | nSw2RO | nSw1Y)
+ 1981   46i                     ;	cmpa swStat_old
+ 1982   47i                     ;	beq daughterChk
+ 1983   48i                     ;	;deal with push buttons
+ 1984   49i                     ;	inc swIntCnt
+ 1985   50i                     ;	staa swStat_old
+ 1986   51i                     
+ 1987   52i                     ;---------------------------------------------------------
+ 1988   53i                     
+ 1989   54i                     	
+ 1990   55i                     	
+ 1991   56i                     	
+ 1992   57i                     ;brset mem-address,mask, jump add
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 1993   58i                     	;brset PORTB,nSw1Y,check_blue	
+ 1994   59i                     	;bset PORTB, #LED1
+ 1995   60i                     	
+ 1996   61i                     	
+ 1997   62i                     check_yellow:
+ 1998   63i                     	
+ 1999   64i a000D20 4E01 0133   	brset PORTB,nSw1Y,endExtIsr
+ 2000   65i                     	
+ 2001   66i a000D24 3B          	pshd
+ 2002   67i a000D25 DC84        	ldd TCNT
+ 2003   68i a000D27 C304 E2     	addd #1250
+ 2004   69i a000D2A 5C94        	std TC2
+ 2005   70i a000D2C 3A          	puld
+ 2006   71i a000D2D 4C8C 04     	bset TMSK1,C2I
+ 2007   72i                     	
+ 2008   73i a000D30 F608 D7     	ldab digit4
+ 2009   74i a000D33 C10C        	cmpb #$0c
+ 2010   75i a000D35 2702        	beq changetoF
+ 2011   76i a000D37 200A        	bra changetoC
+ 2012   77i                     	
+ 2013   78i                     
+ 2014   79i                     changetoF
+ 2015   80i a000D39 4C01 80     	bset PORTB, #LED1
+ 2016   81i a000D3C 860F        	ldaa #$0f
+ 2017   82i a000D3E 7A08 D7     	staa digit4
+ 2018   83i a000D41 2014        	bra endExtIsr
+ 2019   84i                     	
+ 2020   85i                     	
+ 2021   86i                     	
+ 2022   87i                     changetoC
+ 2023   88i a000D43 4D01 80     	bclr PORTB, #LED1
+ 2024   89i a000D46 860C        	ldaa #$0c
+ 2025   90i a000D48 7A08 D7     	staa digit4
+ 2026   91i a000D4B 200A        	bra endExtIsr
+ 2027   92i                     	
+ 2028   93i                     	
+ 2029   94i                     ;	lbeq celsius
+ 2030   95i                     ;	lbra fahreinheit	
+ 2031   96i                     ;	inc count
+ 2032   97i                     ;	ldd count
+ 2033   98i                     ;;	ldx #2
+ 2034   99i                     ;	idiv
+ 2035  100i                     ;	std tmp
+ 2036  101i                     ;	ldaa tmp
+ 2037  102i                     ;	cmpa #1
+ 2038  103i                     ;	lbeq fahreinheit
+ 2039  104i                     		
+ 2040  105i                     		
+ 2041  106i                     		
+ 2042  107i                     		
+ 2043  108i                     ;	ldaa digit1
+ 2044  109i                     ;;;;;	ldab #100
+ 2045  110i                     ;	mul
+ 2046  111i                     ;	std tmpvalue1
+ 2047  112i                     ;	ldab digit2
+ 2048  113i                     ;	ldaa #10
+ 2049  114i                     ;	mul
+ 2050  115i                     ;	std tmpvalue2
+ 2051  116i                     ;	ldaa tmpvalue1
+ 2052  117i                     ;	ldab tmpvalue2
+ 2053  118i                     ;	addd digit3
+ 2054  119i                     ;
+ 2055  120i                     	
+ 2056  121i                     ;check_red:
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 2057  122i                     	
+ 2058  123i                     ;	brset swStat_new,nSw2RO, endExtIsr
+ 2059  124i                     ;	pshd
+ 2060  125i                     ;	ldd TCNT
+ 2061  126i                     ;	addd #1250
+ 2062  127i                     ;	std TC2
+ 2063  128i                     ;	puld
+ 2064  129i                     ;	bset TMSK1,C2I
+ 2065  130i                     
+ 2066  131i                     	
+ 2067  132i                     	
+ 2068  133i                     daughterChk:
+ 2069  134i a000D4D 4F08 2006   	brclr PORTE, Status2, endExtIsr
+ 2070  135i                     	
+ 2071  136i                     ;if we get here there is an unexpected interrupt
+ 2072  137i a000D51 4D08 80     	bclr PORTE, nRST2
+ 2073  138i a000D54 4C08 80     	bset PORTE, nRST2
+ 2074  139i                     	
+ 2075  140i                     endExtIsr:
+ 2076  141i a000D57 0B          	rti
+ 2077  142i                     
+ 2078  143i                     TimerCh2:
+ 2079  144i a000D58 4D8C 04     	bclr TMSK1, C2I
+ 2080  145i a000D5B 9601        	ldaa PORTB
+ 2081  146i a000D5D 8401        	anda #nSw1Y
+ 2082  147i a000D5F 8100        	cmpa #0
+ 2083  148i a000D61 2600        	bne TimeCh2Done
+ 2084  149i                     
+ 2085  150i                     TimeCh2Done:
+ 2086  151i a000D63 0B          	rti
+ 2087  152i                     
+ 2088  153i                     ;TimerCh2:
+ 2089  154i                     ;	bclr TMSK1, C2I
+ 2090  155i                     ;	ldaa PORTB
+ 2091  156i                     ;	anda #nSw2RO
+ 2092  157i                     ;	cmpa #0
+ 2093  158i                     ;	bne TimeCh2Done
+ 2094  159i                     ;	ldab #'R'
+ 2095  160i                     ;	jsr putchar
+ 2096  161i                     	
+ 2097  162i                     ;TimeCh2Done:
+ 2098  163i                     ;	rti
+ 2099  164i                     
+ 2100  165i                     
+ 2101  166i                     ;	LCD Module Commands (taken from Doughman Textbook)
+ 2102  167i                     ;
+ 2103  168i                     ; Subroutine SetCursPos is used to place the cursor at a specific
+ 2104  169i                     ; character location on the display.  To simplify the task of displaying
+ 2105  170i                     ; text messages, this subroutine accepts a number from $00 through $1F
+ 2106  171i                     ; in the B accumulator as a cursor position.  Line one contains 
+ 2107  172i                     ; character positions $00 through $0F while line two contains character
+ 2108  173i                     ; positions $10 through $1F.
+ 2109  174i a000D64 C10F        SetCursPos:	cmpb	#$0f		; first row ($00 - $0f)?
+ 2110  175i a000D66 2306        		bls	FirstLine		; yes. go send command.
+ 2111  176i a000D68 C11F        		cmpb	#$1f		; no. second row ($10 - $1f)?
+ 2112  177i a000D6A 2206        		bhi	BadCursPos		; no. bad position.
+ 2113  178i a000D6C CB30        		addb	#$30		; yes. module cursor addr. is $40 - $4f.
+ 2114  179i a000D6E CB80        FirstLine:	addb	#$80		; msb is cursor command.
+ 2115  180i a000D70 072B        		bsr	SendCmd		; move the cursor.
+ 2116  181i a000D72 3D          BadCursPos:	rts			; return.
+ 2117  182i                     ;
+ 2118  183i                     ; Subroutine which accepts a pointer to a null (zero) terminated string
+ 2119  184i                     ; in the X index register and one of the constants Line1 or Line2 in 
+ 2120  185i                     ; the B accumulator.  The entry point at DispLine will display the 
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 2121  186i                     ; string on the indicated line. The entry point at DispLineE will first 
+ 2122  187i                     ; erase the line before displaying the string
+ 2123  188i a000D73 34          DispLineE:	pshx			; save pointer to the message.
+ 2124  189i a000D74 37          		pshb			; save 'line number'.
+ 2125  190i a000D75 0726        		bsr	SendCmd		; place cursor at start of line.
+ 2126  191i a000D77 CE0D 83     		ldx	#ClrLine		; point to spaces string.
+ 2127  192i a000D7A 0718        		bsr	OutStr		; clear the line.
+ 2128  193i a000D7C 33          		pulb			; restore line number.
+ 2129  194i a000D7D 30          		pulx			; restore the message pointer.
+ 2130  195i a000D7E 071D        DispLine:	bsr	SendCmd		; place cursor at start of line.
+ 2131  196i a000D80 0712        		bsr	OutStr		; display the message.
+ 2132  197i a000D82 3D          		rts	
+ 2133  198i                     ;
+ 2134  199i a000D83 2020 2020   ClrLine:	dc.b	"                ", 0
+             000D87 2020 2020  
+             000D8B 2020 2020  
+             000D8F 2020 2020  
+             000D93 00         
+ 2135  200i                     ;
+ 2136  201i                     ; Subroutine to send null terminated strings to the display module.
+ 2137  202i                     ; On entry the X index register should point to a null terminated string.
+ 2138  203i a000D94 E630        OutStr:		ldab	1,x+		; get next character. Done?
+ 2139  204i a000D96 2704        		beq	MsgDone		; yes. return.
+ 2140  205i a000D98 072F        		bsr	putchar		; no. send it to the display.
+ 2141  206i a000D9A 20F8        		bra	OutStr		; send next character.
+ 2142  207i a000D9C 3D          MsgDone:	rts			; return.
+ 2143  208i                     ;
+ 2144  209i                     ; The SendCmd subroutine transmits one LCD instruction, passed in the
+ 2145  210i                     ; B accumulator, to the display module.
+ 2146  211i a000D9D 0715        SendCmd:	bsr	IsBusy		; is the module busy?
+ 2147  212i a000D9F 26FC        		bne	SendCmd		; yes. keep checking until it's not.
+ 2148  213i a000DA1 4D01 60     		bclr	PORTB,RS+Rw		; RS & R/w = 0.
+ 2149  214i a000DA4 86FF        		ldaa	#$ff		; change port a to outputs.
+ 2150  215i a000DA6 5A02        		staa	DDRA
+ 2151  216i a000DA8 5B00        		stab	PORTA		; put command on module data bus.
+ 2152  217i a000DAA 4C01 10     		bset	PORTB,#EClk		; latch command into module.
+ 2153  218i a000DAD 4D01 10     		bclr	PORTB,#EClk
+ 2154  219i a000DB0 7900 02     		clr	DDRA		; return port a to inputs.
+ 2155  220i a000DB3 3D          		rts
+ 2156  221i                     ;
+ 2157  222i                     ; Subroutine IsBusy returns with the Z condition code register bit 
+ 2158  223i                     ; set if the module's busy bit was clear indicating that the module
+ 2159  224i                     ; is idle and ready to accept another command.
+ 2160  225i a000DB4 7900 02     IsBusy:		clr	DDRA		; make port a inputs.
+ 2161  226i a000DB7 4D01 40     		bclr	PORTB,RS		; RS = 0 for commands.
+ 2162  227i a000DBA 4C01 20     		bset	PORTB,Rw		; set R/w for read.
+ 2163  228i a000DBD 4C01 10     		bset	PORTB,#EClk		; data output 160 nS after rising
+ 2164  229i a000DC0 A7          		nop			; edge of E.
+ 2165  230i a000DC1 9600        		ldaa	PORTA		; get status data from module.
+ 2166  231i a000DC3 4D01 10     		bclr	PORTB,#EClk		; put E-clock back low.
+ 2167  232i a000DC6 8580        		bita	#BUSY		; busy bit set if module is busy.
+ 2168  233i a000DC8 3D          		rts
+ 2169  234i                     		;
+ 2170  235i                     ; Subroutine putchar allows writing a single 8-bit ASCII character
+ 2171  236i                     ; in the B accumulator to the LCD display.
+ 2172  237i a000DC9 07E9        putchar:	bsr	IsBusy		; is the module busy?
+ 2173  238i a000DCB 26FC        		bne	putchar		; yes. must wait until it's not.
+ 2174  239i a000DCD 4D01 20     		bclr	PORTB,Rw		; set R/w for write.
+ 2175  240i a000DD0 4C01 40     		bset	PORTB,RS		; set RS = 1 for data write.
+ 2176  241i a000DD3 86FF        		ldaa	#$ff		; make port a outputs.
+ 2177  242i a000DD5 5A02        		staa	DDRA
+ 2178  243i a000DD7 5B00        		stab	PORTA		; put character on module's data bus.
+ 2179  244i a000DD9 4C01 10     		bset	PORTB,#EClk		; clock it into the module.
+ 2180  245i a000DDC 4D01 10     		bclr	PORTB,#EClk
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 2181  246i a000DDF 7900 02     		clr	DDRA		; make port a inputs.
+ 2182  247i a000DE2 3D          		rts			; return.
+ 2183  248i                     ;
+ 2184  179                      		INCLUDE "DaughterBrdLib.inc"				
+ 2185    1i                     ;
+ 2186    2i a000DE3 C1FF        DispDigit:	cmpb	#$ff	; blank the display?
+ 2187    3i a000DE5 2604        		bne	NoBlank	; no. check for valid hex digit.
+ 2188    4i a000DE7 52          		incb
+ 2189    5i a000DE8 5BFE        		stab	PORTDLC	; yes. store $ff to turn off all segments.
+ 2190    6i a000DEA 3D          		rts
+ 2191    7i a000DEB C10F        NoBlank:	cmpb	#$0f	; b greater than max. hex digit?
+ 2192    8i a000DED 220B        		bhi	Error	; yes. don't change display.
+ 2193    9i a000DEF CE0D FB     		ldx	#LEDTable	; no. point to translation table.
+ 2194   10i a000DF2 96FE        		ldaa	PORTDLC	; get value of segments
+ 2195   11i a000DF4 8480        		anda	#$80	; mask off all but decimal point.
+ 2196   12i a000DF6 AAE5        		oraa	b,x	; OR in info from seg. table.
+ 2197   13i a000DF8 5AFE        		staa	PORTDLC	; update display data.
+ 2198   14i a000DFA 3D          Error:		rts		; return.
+ 2199   15i                     ;
+ 2200   16i a000DFB 3F          LEDTable:	dc.b	%00111111	; zero
+ 2201   17i a000DFC 06          		dc.b	%00000110	; one
+ 2202   18i a000DFD 5B          		dc.b	%01011011	; two
+ 2203   19i a000DFE 4F          		dc.b	%01001111	; three
+ 2204   20i a000DFF 66          		dc.b	%01100110	; four
+ 2205   21i a000E00 6D          		dc.b	%01101101	; five
+ 2206   22i a000E01 7D          		dc.b	%01111101	; six
+ 2207   23i a000E02 07          		dc.b	%00000111	; seven
+ 2208   24i a000E03 7F          		dc.b	%01111111	; eight
+ 2209   25i a000E04 67          		dc.b	%01100111	; nine
+ 2210   26i a000E05 77          		dc.b	%01110111	; A
+ 2211   27i a000E06 7C          		dc.b	%01111100	; b
+ 2212   28i a000E07 39          		dc.b	%00111001	; C
+ 2213   29i a000E08 5E          		dc.b	%01011110	; d
+ 2214   30i a000E09 79          		dc.b	%01111001	; E
+ 2215   31i a000E0A 71          		dc.b	%01110001	; F
+ 2216   32i                     ;
+ 2217  180                      		INCLUDE "remainderLib.inc"
+ 2218    1i                     ; Completed assignment submitted by:
+ 2219    2i                     ;
+ 2220    3i                     ; Student #1 -- Name: _________________  Student #: ______________
+ 2221    4i                     ;
+ 2222    5i                     ; Student #2 -- Name: _________________  Student #: ______________
+ 2223    6i                     ;
+ 2224    7i                     
+ 2225    8i                     ;*** Note:  we may have introduced one or more errors in this file.
+ 2226    9i                     
+ 2227   10i                     ;A subroutine that calculates the remainder of a division between a dividend 
+ 2228   11i                     ;and a divisor. The divisor is a one byte unsigned number and it's address is
+ 2229   12i                     ;provided by the Y register. The dividend is a multiple byte unsigned number with
+ 2230   13i                     ;maximum length of 4 bytes (maximum value of $FFFF,FFFF) and the address of it is 
+ 2231   14i                     ;derived from the X register. The X register points at the dividend 
+ 2232   15i                     ;length byte which is followed by the "value" bytes of the dividend (check the TestTbl).
+ 2233   16i                     ;The subroutine returns in accumulator A the remainder of the division.  In 
+ 2234   17i                     ;addition, the subroutine returns in accumulator B the value 0 if the quotient,
+ 2235   18i                     ;as an unsigned value, would fit in an 8-bit byte (i.e. the quotient would be 255 or 
+ 2236   19i                     ;less).  Otherwise, the subroutine returns in accumulator B the value 1.
+ 2237   20i                     ;
+ 2238   21i                     ;********************************** Method *************************************
+ 2239   22i                     ;The remainder subroutine is written in an easy way and uses
+ 2240   23i                     ;a "multiple byte" subtraction subroutine which subtracts a single byte unsigned  
+ 2241   24i                     ;number from a multiple-byte unsigned number. By doing multiple
+ 2242   25i                     ;subtractions and checking the "borrow flag", we easily obtain the remainder of 
+ 2243   26i                     ;the "multiple byte" division.  This is not processor efficient in general, but we 
+ 2244   27i                     ;are not concerned with processor efficiency for this subroutine.  
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 2245   28i                     ;
+ 2246   29i                     
+ 2247   30i                     ;************* Remainder subroutine input and output data summary ****************
+ 2248   31i                     ;Entry:	X = address of dividend (length plus value bytes); Y = address of divisor
+ 2249   32i                     ;Exit:  A = remainder; B = 0 if quotient would fit in 8-bit byte, 1 otherwise
+ 2250   33i                     ;Regs Modified:  X,Y,CCR
+ 2251   34i                     ;Global Variables Modified:  Scratch, QuotientLSB, QuotientIsBig
+ 2252   35i                     ;NOTE:  does not modify the dividend at the address passed in through X
+ 2253   36i                     		
+ 2254   37i                     Remainder:	
+ 2255   38i                     		; initialize variables
+ 2256   39i                     		; copy dividend to scratch area
+ 2257   40i                     
+ 2258   41i a000E0B 35          		pshy
+ 2259   42i a000E0C CD08 03     		ldy	#Scratch
+ 2260   43i a000E0F E600        		ldab	X		; copy dividend length to b.
+ 2261   44i a000E11 6B40        		stab	Y		;	and store it
+ 2262   45i                     		
+ 2263   46i                     
+ 2264   47i                     DLoop1:
+ 2265   48i a000E13 180A E5ED   		movb	B,X,B,Y		; both arguments use indexed addressing
+ 2266   49i a000E17 0431 F9     		dbne	B,DLoop1
+ 2267   50i                     
+ 2268   51i                     		; initialize other variables
+ 2269   52i                     		
+ 2270   53i a000E1A 180B 0008   		movb	#0,QuotientLSB
+             000E1E 08         
+ 2271   54i a000E1F 180B 0008   		movb	#0,QuotientIsBig
+             000E23 09         
+ 2272   55i                     		
+ 2273   56i a000E24 30          		pulx			; now X has address of divisor
+ 2274   57i                     		
+ 2275   58i                     		; subtract in loop until borrow
+ 2276   59i                     DLoop2:
+ 2277   60i a000E25 0718        		bsr	BigSubtract
+ 2278   61i a000E27 250C        		bcs	Cont
+ 2279   62i                     
+ 2280   63i a000E29 7208 08     		inc	QuotientLSB
+ 2281   64i a000E2C 26F7        		bne	DLoop2
+ 2282   65i a000E2E 180B 0108   		movb	#1,QuotientIsBig	; quotient is non-zero multiple of 256.
+             000E32 09         
+ 2283   66i a000E33 20F0        		bra	DLoop2
+ 2284   67i                     
+ 2285   68i                     Cont:		
+ 2286   69i                     		; add back divisor
+ 2287   70i                     
+ 2288   71i a000E35 E640        		ldab	Y	; put dividend length in b
+ 2289   72i a000E37 A6ED        		ldaa	B,Y	; load a with least significant byte
+ 2290   73i a000E39 AB00        		adda	X	; remainder in A
+ 2291   74i                     		
+ 2292   75i a000E3B F608 09     		ldab	QuotientIsBig
+ 2293   76i                     		
+ 2294   77i a000E3E 3D          		rts
+ 2295   78i                     EndRemainder:	
+ 2296   79i                     	
+ 2297   80i                     ;************* BigSubtract subroutine input and output data summary **************
+ 2298   81i                     ;Entry:	Y = address of minuend (length plus value bytes); X = address of subtrahend
+ 2299   82i                     ;Exit:  C = borrow status 
+ 2300   83i                     ;Regs Modified:  A,B,CCR
+ 2301   84i                     ;Variables Modified:  minuend value bytes are modified to become the difference
+ 2302   85i                     		
+ 2303   86i                     BigSubtract:	
+ 2304   87i a000E3F E640        		ldab	y	; load b with minuend length
+ 2305   88i                     
+
+Metrowerks HC12-Assembler 
+(c) COPYRIGHT METROWERKS 1987-2003
+
+ Abs. Rel.   Loc    Obj. code   Source line
+ ---- ----   ------ ---------   -----------
+ 2306   89i                     		;first do subtraction on Least Significant Byte (LSB)		
+ 2307   90i a000E41 A6ED        		ldaa	B,Y	; move byte to a
+ 2308   91i a000E43 A200        		sbca	X	
+ 2309   92i a000E45 6AED        		staa	B,Y	; move a back to memory
+ 2310   93i a000E47 0401 0B     		dbeq	B,BSEnd	
+ 2311   94i                     		
+ 2312   95i                     		;then loop doing borrowing if needed
+ 2313   96i                     		;this has been optimized to detect when no (more) borrowing is needed
+ 2314   97i                     BSLoop:		
+ 2315   98i a000E4A 2409        		bcc	BSEnd
+ 2316   99i a000E4C A6ED        		ldaa	B,Y			
+ 2317  100i a000E4E 8200        		sbca	#0
+ 2318  101i a000E50 6AED        		staa	B,Y	 
+ 2319  102i a000E52 0431 F5     		dbne	B,BSLoop
+ 2320  103i                     		
+ 2321  104i                     BSEnd:
+ 2322  105i a000E55 3D          		rts
+ 2323  106i                     		
+ 2324  181                      
+ 2325  182                      	
+ 2326  183                      		
+ 2327  184                      
+ 2328  185                      

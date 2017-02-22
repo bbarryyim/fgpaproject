@@ -1,0 +1,9 @@
+;initializing the timer	
+	movw	#TimerCh0, TimerCh0IsrP
+	movw	#TimerCh1, TimerCh1IsrP
+	
+	bset TIOS,IOS0|IOS1
+	
+	bset
+	
+	

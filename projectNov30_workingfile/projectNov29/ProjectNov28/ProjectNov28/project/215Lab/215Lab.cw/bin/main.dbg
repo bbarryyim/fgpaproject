@@ -1,0 +1,773 @@
+;****************************************************************
+;* This is a simple absolute assembly project                    *
+;* Portions Copyright © 2008 W. Craig Scratchley
+;* School of Engineering Science, SFU, BC, Canada  V5A 1S6
+;* ENSC 215, May 2008
+;* Copying and distribution of this file, with or without modification,
+;*     are permitted in any medium without royalty provided the copyright
+;*     notice and this notice are preserved.
+;*****************************************************************
+		
+; port-var.inc can be included to get ports to the debugger's data window, etc.
+;		INCLUDE "portVar.inc"
+
+		ORG 	RAMBase
+		
+StackRes	EQU	40	; amount of stack space to reserve
+
+
+; variable definitions for unit tests can be conditionally included here
+
+
+
+
+; code space
+; For this project, the label ENTRY must be used for the beginning of
+;	the program.
+		INCLUDE "FpgaBrdVar.inc"
+swIntCnt:	ds.b 1	;Switch interrupt counter.
+swStat_old:	ds.b 1	;old switch status
+swStat_new:	ds.b 1
+		INCLUDE "remainderVar.inc"
+***************************************************
+; GLOBAL VARIABLES FOR Remainder LIBRARY
+***************************************************
+
+Scratch		ds.b	5
+QuotientLSB	ds.b	1
+QuotientIsBig	ds.b	1
+
+***************************************************
+; Calculate the size of the Remainder subroutine.
+;SrSize:		dc.w	EndRemainder - Remainder
+
+
+ENTRY:
+; stack grows down, so location #Dbg12Ram will not be modified.
+		lds	#Dbg12Ram	;set up stack pointer
+		INCLUDE "FpgaBrdInit.inc"
+
+
+	bset  DDRB, #LED1
+;LCD Initialization
+		bset DDRE, CheckLcdBusy
+		bclr PORTE, CheckLcdBusy
+		
+		clr PORTB
+		
+		bset DDRB, EClk | Rw | RS
+;-----------------------------------------------		
+
+		ldaa #$ff
+		staa DDRA
+		ldaa #8
+
+		psha
+		ldy #InitCmdTbl
+		
+
+NextCmd:	ldaa 1,y+
+		staa PORTA
+
+		bset PORTB,#EClk		
+
+		bclr PORTB,#EClk
+		ldab 1,y+
+
+		jsr uS100Delay
+		
+		
+
+		dec 0,sp
+		bne NextCmd
+		pula
+;--------------------------------------------------	
+; interrupt initialization	
+	bset DDRE, nRST1 | nRST2
+	;;; bclr DDRE, Status2 ; default setting
+	movb #0, swIntCnt ; initialize the interrupt counter
+	; initialize switch status variable (swStat_old)
+	ldaa PORTB
+	; only the four button bits are important
+	anda #(nSw4B | nSw3WG | nSw2RO | nSw1Y)
+	staa swStat_old
+	;Initialize the external interrupt
+	movw #ExtIsr, IRQIsrP
+	bclr PORTE, nRST1 | nRST2 ; reset flipflops
+	;enable external interrupts in default level-sensitive mode
+	; (not edge sentitive)
+	bset INTCR, IRQEN |!IRQE
+	;enable push button interrupt but not daughter brd interrupt
+	bset PORTE, nRST1 |!nRST2	
+		INCLUDE "DaughterBrdInit.inc"
+; Initialize 7-segment displays
+
+	bset	DDRS, DISPA0 | DISPA1 | nDISPEN | DDP
+	bset	DDRDLC, #$7f			;DA-DG as output
+	
+	bclr	PORTS, DDP | nDISPEN		;decimal point off
+
+	
+		INCLUDE "CommonInit.inc"
+;	movw	#TimerCh2,TimerCh2IsrP	;Int vector Init
+
+;Timer-related initialization
+
+;	bset	TIOS,IOS2		;CH2 ouptput compare
+;	bset	TMSK2,PR0 | PR2		;Prescaler = 32
+;	bset	TSCR,TEN | TFFCA	;timer enable & Fast Flag clear
+		;INCLUDE "DaughterBrdTest.inc"
+		INCLUDE "TimerInit.inc"
+;initializing the timer	
+
+;Timer 3 (Finding period1 and period2
+
+	movw	#TimerCh3, TimerCh3IsrP
+;	movw	#TimerCh2, TimerCh2IsrP
+	
+	;bset TIOS,IOS0|IOS1
+	bset TMSK1,C3I	
+	bset TMSK2, PR0 | PR2
+	bset TCTL4, %11000000	
+	;set Timer control register to capture rising or falling edge
+	
+	bset TSCR,TEN|TFFCA
+
+
+;Timer 1 (For 3Hz interrupt)
+
+;	movw	#TimerCh1, TimerCh1IsrP
+;	bset	TIOS,IOS1
+;	bset	TMSK1,C1I
+;	bset	TMSK2,PR0 | PR2
+;	bset	TSCR,TEN|TFFCA
+	
+	
+;Timer 2 (de-bouncing )
+	
+;End of Timer init
+	
+	;	INCLUDE "Timer.inc"
+		
+;Final Project
+
+
+;	bset PORTS,DTS	;turn on the temperature sensor
+; 	bclr TIOS,IOS3	;set timer to input capture, using channel 3	
+	
+;-------------------------------------------------------------
+
+;Finding temperature
+F	EQU 	7200
+G	EQU	4550
+P	EQU	4000
+Q	EQU	2350
+
+R	EQU	100
+S	EQU	10
+
+;	MOVw	#5, T1
+;	MOVw	#10, T2
+	lbra celsius
+
+;RunLoop:
+
+
+;	ldd count
+;	ldx #2
+;	idiv
+;	std tmp
+;	ldaa tmp
+;	cmpa #1
+;	lbeq fahreinheit		
+;Joanne's Loop
+
+LED:	
+	bclr PORTS, DISPA0|DISPA1
+
+	ldab digit1
+	jsr DispDigit
+	jsr NoGhost
+	
+	bset PORTS, DISPA0
+	bclr PORTS, DISPA1
+	bset PORTS,DDP
+	ldab digit2
+	jsr DispDigit
+	jsr NoGhost
+	bclr PORTS,DDP
+	
+	bclr PORTS, DISPA0
+	bset PORTS, DISPA1
+	ldab digit3
+	jsr DispDigit
+	jsr NoGhost
+	
+	bset PORTS,DISPA0
+	bset PORTS,DISPA1
+	ldab digit4
+	jsr DispDigit
+	jsr NoGhost
+	
+	ldaa digit4
+	cmpa #$0c
+	lbeq celsius
+	lbra fahreinheit
+
+
+NoGhost:
+	ldab #5
+	jsr uS100Delay
+	ldab #$ff
+	jsr DispDigit
+	rts			
+i	ds.b	1
+;num	dc.b	2,$0f,3,$0f
+;num1	ds.w	1	
+;-----------------------------------------------------	
+
+value1	ds.w	1
+
+dig1	ds.b	1
+dig2	DS.B	1	
+dig3	ds.b	1
+digit1	ds.b	1
+digit2	ds.b	1
+digit3	ds.b	1
+digit4	ds.b	1
+	
+count		ds.b	1	
+oldvalue	ds.b	1
+segAdd		ds.b	1
+segVar0		ds.b	1
+last		ds.w	1
+periodT1	ds.w	1
+periodT2	ds.w	1
+T1		ds.w	1
+T2		ds.w	1	
+	
+		jmp	ENTRY	
+	
+
+;subroutine libraries and constants
+;subroutine libraries and constants in RAM
+;try to put subroutine libraries in active development here
+	;	INCLUDE "FpgaBrdLib.inc"
+	;	INCLUDE "DaughterBrdLib.inc"
+		INCLUDE "Timer.inc"
+
+TimerCh3:
+	ldd TC3
+	tfr d,y
+	
+	brclr PORTT, #%00001000, rising
+	subd	last
+	std	periodT2
+;	movw	#5,periodT2
+	sty	last
+	bra	done
+	
+rising:
+	;bset PORTT,#%00001000
+	subd 	last
+	std 	periodT1
+;	movw	#2,periodT1
+	sty 	last
+	
+
+done:
+	;movw	TC3,last
+	rti
+		INCLUDE "TimerTest.inc"
+
+	
+
+	
+		INCLUDE "tempCalc.inc"
+celsius:
+
+
+	ldx periodT1
+	stx T1
+
+
+	ldx periodT2
+	stx T2
+		
+	ldd #P
+	ldy T1
+	
+	emul
+
+	ldx T2
+	
+	ediv
+;-------------------------	
+	sty value1
+
+	ldd #Q
+	subd value1
+	ldx #R
+	idiv
+	stx dig1
+	movb dig2,digit1
+
+	ldx #S
+	idiv
+	stx dig1
+	movb dig2,digit2
+	std dig1
+	movb dig2,digit3
+	
+	movb #$0c,digit4
+	lbra LED
+;-----------------------
+
+
+fahreinheit:
+	
+	ldx periodT1
+	stx T1
+
+
+	ldx periodT2
+	stx T2
+		
+	ldd #F
+	ldy T1
+	
+	emul
+
+	ldx T2
+	
+	ediv
+;-------------------------	
+	sty value1
+
+	ldd #G
+	subd value1
+	ldx #R
+	idiv
+	stx dig1
+	movb dig2,digit1
+
+	ldx #S
+	idiv
+	stx dig1
+	movb dig2,digit2
+	std dig1
+	movb dig2,digit3
+	movb #$0f,digit4
+	lbra LED	
+	
+		
+;tidy up RAM and switch to EEPROM
+		INCLUDE "SwitchToEeprom.inc"
+;*****************************************************************
+;* Copyright © 2008-2009 W. Craig Scratchley
+;* School of Engineering Science, SFU, BC, Canada  V5A 1S6
+;* ENSC 215, June 2009
+;* Copying and distribution of this file, with or without modification,
+;*     are permitted in any medium without royalty provided the copyright
+;*     notice and this notice are preserved.
+;*****************************************************************
+		
+	
+;subroutine libraries and constants in EEPROM
+;use this space if RAM gets to full
+;order so that more-stable libraries come before less-stable libraries
+; ...
+		INCLUDE "FpgaBrdLib.inc"
+; ENSC 151 FPGA board library
+
+FirstCmd:	equ	LcdFuncSet | LcdDL | LcdN	; | !LcdF	
+		
+; Table of initialization commands (see Sharp LCD documentation)
+;
+;					100uS
+;			instruction	delay		
+;			byte		periods
+InitCmdTbl:	dc.b	FirstCmd,	41	; get the modules attention.
+		dc.b	FirstCmd,	1
+		dc.b	FirstCmd,	1
+		dc.b	FirstCmd,	1	; specify interface width, lines & font.
+		dc.b	LcdDispOnOff | !LcdD | !LcdC | !LcdB
+		dc.b			1	; turn display off.
+		dc.b	LcdDispClr,	17		
+		dc.b	LcdEntMdSet | LcdInD | !LcdS
+		dc.b			1	; increment cursor, no display scroll.
+		dc.b	LcdDispOnOff | LcdD | LcdC | LcdB
+		dc.b			1	
+
+; Subroutine to delay for multiples of 100uS.
+; Taken from "Programming the Motorola M68HC12 Family" by G. Doughman, 2000
+; The number of multiples should be placed in accumulator b.
+; Regs Mod:  CCR, X, B
+
+uS100Delay:	ldx	#200		; 100 uS delay constant @ 8MHz E-clock.
+Delay:		dex
+		bne	Delay
+		dbne	b,uS100Delay	; times the number in a	accumulator	        	
+		rts
+;Inerrupt Service routine for the External IRQ
+
+ExtIsr:
+	;send reset pusle to push button(/LCD) flip flop
+	bclr PORTE, nRST1
+	bset PORTE, nRST1
+	
+	
+;----------------------------------------------------------
+	
+;	;Check if the interrupt is from the Push Buttons
+;	ldaa PORTB
+;	; only the four button bits are important
+;	anda #(nSw4B | nSw3WG | nSw2RO | nSw1Y)
+;	cmpa swStat_old
+;	beq daughterChk
+;	;deal with push buttons
+;	inc swIntCnt
+;	staa swStat_old
+
+;---------------------------------------------------------
+
+	
+	
+	
+;brset mem-address,mask, jump add
+	;brset PORTB,nSw1Y,check_blue	
+	;bset PORTB, #LED1
+	
+	
+check_yellow:
+	
+	brset PORTB,nSw1Y,endExtIsr
+	
+	pshd
+	ldd TCNT
+	addd #1250
+	std TC2
+	puld
+	bset TMSK1,C2I
+	
+	ldab digit4
+	cmpb #$0c
+	beq changetoF
+	bra changetoC
+	
+
+changetoF
+	bset PORTB, #LED1
+	ldaa #$0f
+	staa digit4
+	bra endExtIsr
+	
+	
+	
+changetoC
+	bclr PORTB, #LED1
+	ldaa #$0c
+	staa digit4
+	bra endExtIsr
+	
+	
+;	lbeq celsius
+;	lbra fahreinheit	
+;	inc count
+;	ldd count
+;;	ldx #2
+;	idiv
+;	std tmp
+;	ldaa tmp
+;	cmpa #1
+;	lbeq fahreinheit
+		
+		
+		
+		
+;	ldaa digit1
+;;;;;	ldab #100
+;	mul
+;	std tmpvalue1
+;	ldab digit2
+;	ldaa #10
+;	mul
+;	std tmpvalue2
+;	ldaa tmpvalue1
+;	ldab tmpvalue2
+;	addd digit3
+;
+	
+;check_red:
+	
+;	brset swStat_new,nSw2RO, endExtIsr
+;	pshd
+;	ldd TCNT
+;	addd #1250
+;	std TC2
+;	puld
+;	bset TMSK1,C2I
+
+	
+	
+daughterChk:
+	brclr PORTE, Status2, endExtIsr
+	
+;if we get here there is an unexpected interrupt
+	bclr PORTE, nRST2
+	bset PORTE, nRST2
+	
+endExtIsr:
+	rti
+
+TimerCh2:
+	bclr TMSK1, C2I
+	ldaa PORTB
+	anda #nSw1Y
+	cmpa #0
+	bne TimeCh2Done
+
+TimeCh2Done:
+	rti
+
+;TimerCh2:
+;	bclr TMSK1, C2I
+;	ldaa PORTB
+;	anda #nSw2RO
+;	cmpa #0
+;	bne TimeCh2Done
+;	ldab #'R'
+;	jsr putchar
+	
+;TimeCh2Done:
+;	rti
+
+
+;	LCD Module Commands (taken from Doughman Textbook)
+;
+; Subroutine SetCursPos is used to place the cursor at a specific
+; character location on the display.  To simplify the task of displaying
+; text messages, this subroutine accepts a number from $00 through $1F
+; in the B accumulator as a cursor position.  Line one contains 
+; character positions $00 through $0F while line two contains character
+; positions $10 through $1F.
+SetCursPos:	cmpb	#$0f		; first row ($00 - $0f)?
+		bls	FirstLine		; yes. go send command.
+		cmpb	#$1f		; no. second row ($10 - $1f)?
+		bhi	BadCursPos		; no. bad position.
+		addb	#$30		; yes. module cursor addr. is $40 - $4f.
+FirstLine:	addb	#$80		; msb is cursor command.
+		bsr	SendCmd		; move the cursor.
+BadCursPos:	rts			; return.
+;
+; Subroutine which accepts a pointer to a null (zero) terminated string
+; in the X index register and one of the constants Line1 or Line2 in 
+; the B accumulator.  The entry point at DispLine will display the 
+; string on the indicated line. The entry point at DispLineE will first 
+; erase the line before displaying the string
+DispLineE:	pshx			; save pointer to the message.
+		pshb			; save 'line number'.
+		bsr	SendCmd		; place cursor at start of line.
+		ldx	#ClrLine		; point to spaces string.
+		bsr	OutStr		; clear the line.
+		pulb			; restore line number.
+		pulx			; restore the message pointer.
+DispLine:	bsr	SendCmd		; place cursor at start of line.
+		bsr	OutStr		; display the message.
+		rts	
+;
+ClrLine:	dc.b	"                ", 0
+;
+; Subroutine to send null terminated strings to the display module.
+; On entry the X index register should point to a null terminated string.
+OutStr:		ldab	1,x+		; get next character. Done?
+		beq	MsgDone		; yes. return.
+		bsr	putchar		; no. send it to the display.
+		bra	OutStr		; send next character.
+MsgDone:	rts			; return.
+;
+; The SendCmd subroutine transmits one LCD instruction, passed in the
+; B accumulator, to the display module.
+SendCmd:	bsr	IsBusy		; is the module busy?
+		bne	SendCmd		; yes. keep checking until it's not.
+		bclr	PORTB,RS+Rw		; RS & R/w = 0.
+		ldaa	#$ff		; change port a to outputs.
+		staa	DDRA
+		stab	PORTA		; put command on module data bus.
+		bset	PORTB,#EClk		; latch command into module.
+		bclr	PORTB,#EClk
+		clr	DDRA		; return port a to inputs.
+		rts
+;
+; Subroutine IsBusy returns with the Z condition code register bit 
+; set if the module's busy bit was clear indicating that the module
+; is idle and ready to accept another command.
+IsBusy:		clr	DDRA		; make port a inputs.
+		bclr	PORTB,RS		; RS = 0 for commands.
+		bset	PORTB,Rw		; set R/w for read.
+		bset	PORTB,#EClk		; data output 160 nS after rising
+		nop			; edge of E.
+		ldaa	PORTA		; get status data from module.
+		bclr	PORTB,#EClk		; put E-clock back low.
+		bita	#BUSY		; busy bit set if module is busy.
+		rts
+		;
+; Subroutine putchar allows writing a single 8-bit ASCII character
+; in the B accumulator to the LCD display.
+putchar:	bsr	IsBusy		; is the module busy?
+		bne	putchar		; yes. must wait until it's not.
+		bclr	PORTB,Rw		; set R/w for write.
+		bset	PORTB,RS		; set RS = 1 for data write.
+		ldaa	#$ff		; make port a outputs.
+		staa	DDRA
+		stab	PORTA		; put character on module's data bus.
+		bset	PORTB,#EClk		; clock it into the module.
+		bclr	PORTB,#EClk
+		clr	DDRA		; make port a inputs.
+		rts			; return.
+;
+		INCLUDE "DaughterBrdLib.inc"				
+;
+DispDigit:	cmpb	#$ff	; blank the display?
+		bne	NoBlank	; no. check for valid hex digit.
+		incb
+		stab	PORTDLC	; yes. store $ff to turn off all segments.
+		rts
+NoBlank:	cmpb	#$0f	; b greater than max. hex digit?
+		bhi	Error	; yes. don't change display.
+		ldx	#LEDTable	; no. point to translation table.
+		ldaa	PORTDLC	; get value of segments
+		anda	#$80	; mask off all but decimal point.
+		oraa	b,x	; OR in info from seg. table.
+		staa	PORTDLC	; update display data.
+Error:		rts		; return.
+;
+LEDTable:	dc.b	%00111111	; zero
+		dc.b	%00000110	; one
+		dc.b	%01011011	; two
+		dc.b	%01001111	; three
+		dc.b	%01100110	; four
+		dc.b	%01101101	; five
+		dc.b	%01111101	; six
+		dc.b	%00000111	; seven
+		dc.b	%01111111	; eight
+		dc.b	%01100111	; nine
+		dc.b	%01110111	; A
+		dc.b	%01111100	; b
+		dc.b	%00111001	; C
+		dc.b	%01011110	; d
+		dc.b	%01111001	; E
+		dc.b	%01110001	; F
+;
+		INCLUDE "remainderLib.inc"
+; Completed assignment submitted by:
+;
+; Student #1 -- Name: _________________  Student #: ______________
+;
+; Student #2 -- Name: _________________  Student #: ______________
+;
+
+;*** Note:  we may have introduced one or more errors in this file.
+
+;A subroutine that calculates the remainder of a division between a dividend 
+;and a divisor. The divisor is a one byte unsigned number and it's address is
+;provided by the Y register. The dividend is a multiple byte unsigned number with
+;maximum length of 4 bytes (maximum value of $FFFF,FFFF) and the address of it is 
+;derived from the X register. The X register points at the dividend 
+;length byte which is followed by the "value" bytes of the dividend (check the TestTbl).
+;The subroutine returns in accumulator A the remainder of the division.  In 
+;addition, the subroutine returns in accumulator B the value 0 if the quotient,
+;as an unsigned value, would fit in an 8-bit byte (i.e. the quotient would be 255 or 
+;less).  Otherwise, the subroutine returns in accumulator B the value 1.
+;
+;********************************** Method *************************************
+;The remainder subroutine is written in an easy way and uses
+;a "multiple byte" subtraction subroutine which subtracts a single byte unsigned  
+;number from a multiple-byte unsigned number. By doing multiple
+;subtractions and checking the "borrow flag", we easily obtain the remainder of 
+;the "multiple byte" division.  This is not processor efficient in general, but we 
+;are not concerned with processor efficiency for this subroutine.  
+;
+
+;************* Remainder subroutine input and output data summary ****************
+;Entry:	X = address of dividend (length plus value bytes); Y = address of divisor
+;Exit:  A = remainder; B = 0 if quotient would fit in 8-bit byte, 1 otherwise
+;Regs Modified:  X,Y,CCR
+;Global Variables Modified:  Scratch, QuotientLSB, QuotientIsBig
+;NOTE:  does not modify the dividend at the address passed in through X
+		
+Remainder:	
+		; initialize variables
+		; copy dividend to scratch area
+
+		pshy
+		ldy	#Scratch
+		ldab	X		; copy dividend length to b.
+		stab	Y		;	and store it
+		
+
+DLoop1:
+		movb	B,X,B,Y		; both arguments use indexed addressing
+		dbne	B,DLoop1
+
+		; initialize other variables
+		
+		movb	#0,QuotientLSB
+		movb	#0,QuotientIsBig
+		
+		pulx			; now X has address of divisor
+		
+		; subtract in loop until borrow
+DLoop2:
+		bsr	BigSubtract
+		bcs	Cont
+
+		inc	QuotientLSB
+		bne	DLoop2
+		movb	#1,QuotientIsBig	; quotient is non-zero multiple of 256.
+		bra	DLoop2
+
+Cont:		
+		; add back divisor
+
+		ldab	Y	; put dividend length in b
+		ldaa	B,Y	; load a with least significant byte
+		adda	X	; remainder in A
+		
+		ldab	QuotientIsBig
+		
+		rts
+EndRemainder:	
+	
+;************* BigSubtract subroutine input and output data summary **************
+;Entry:	Y = address of minuend (length plus value bytes); X = address of subtrahend
+;Exit:  C = borrow status 
+;Regs Modified:  A,B,CCR
+;Variables Modified:  minuend value bytes are modified to become the difference
+		
+BigSubtract:	
+		ldab	y	; load b with minuend length
+
+		;first do subtraction on Least Significant Byte (LSB)		
+		ldaa	B,Y	; move byte to a
+		sbca	X	
+		staa	B,Y	; move a back to memory
+		dbeq	B,BSEnd	
+		
+		;then loop doing borrowing if needed
+		;this has been optimized to detect when no (more) borrowing is needed
+BSLoop:		
+		bcc	BSEnd
+		ldaa	B,Y			
+		sbca	#0
+		staa	B,Y	 
+		dbne	B,BSLoop
+		
+BSEnd:
+		rts
+		
+
+	
+		
+
+
